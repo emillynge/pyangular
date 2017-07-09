@@ -1,0 +1,33 @@
+<md-toolbar color="primary">
+  <span>{{title}}</span>
+  <span class="example-fill-remaining-space"></span>
+  <span>
+    <button md-button [mdMenuTriggerFor]="accountMenu">
+      <md-icon *ngIf="us.role.accessLevel < 1" >
+        person_outline
+      </md-icon>
+      <md-icon *ngIf="us.role.accessLevel < 10 && us.role.accessLevel >= 1" >
+        person
+      </md-icon>
+      <md-icon *ngIf="us.role.accessLevel >= 10" >
+        supervisor_account
+      </md-icon>
+    </button>
+  </span>
+
+</md-toolbar>
+
+<md-menu #accountMenu="mdMenu">
+  <div *ngIf="us.role.accessLevel > 0; else signedOut2" >
+    <button md-menu-item (click)="signOut()" ><md-icon svgIcon="logout"></md-icon></button>
+    <button md-menu-item (click)="gotoUser()" ><md-icon>build</md-icon></button>
+
+  </div>
+  <ng-template #signedOut2 >
+    <button md-menu-item (click)="signIn()" ><md-icon svgIcon="login">logout</md-icon></button>
+  </ng-template>
+
+  <button md-menu-item (click)="switchAccount()" > <md-icon svgIcon="account-switch"></md-icon> </button>
+</md-menu>
+
+<router-outlet></router-outlet>
