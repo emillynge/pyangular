@@ -3,6 +3,7 @@ import { UserService, Role } from "./user/user.service";
 import {MdIconRegistry} from "@angular/material";
 import {DomSanitizer} from "@angular/platform-browser";
 import {Router} from "@angular/router";
+import {environment } from "../environments/environment"
 
 
 @Component({
@@ -13,7 +14,7 @@ import {Router} from "@angular/router";
 })
 
 export class AppComponent {
-  title = 'Team Lyx';
+  title = environment.applicationName;
   signedIn = false;
   public us: UserService;
 

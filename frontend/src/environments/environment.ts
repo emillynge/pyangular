@@ -6,4 +6,5 @@
 export const environment = {
   production: false,
   googleClientId: "INSERT_CLIENT_ID_HERE",
+  applicationName: "PyAngular"
 };
