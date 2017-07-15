@@ -67,6 +67,7 @@ export class UserService {
   private signedOutRole: Role = {name: "signedout", description: "A gUser that is not not signed in to the application", accessLevel: 0};
   private gapiNotLoadedRole: Role = {name: "unknown", description: "Role of gUser cannot be determined yet", accessLevel: -1};
   public roles: Map<number, Role> = new  Map<number, Role>();
+  public profileFuture: AsyncSubject<Profile>;
 
   constructor(private googleAuth: GoogleAuthService,
               private gapiService: GoogleApiService,
@@ -79,7 +80,10 @@ export class UserService {
     this.addRole(this.gapiNotLoadedRole);
 
     this.role = this.gapiNotLoadedRole;
+
+    this.profileFuture = new AsyncSubject();
     gapiService.onLoad(()=> {
+
       this.gapiLoaded = true;
       this.googleAuth.getAuth()
         .subscribe((auth) => {
@@ -107,6 +111,17 @@ export class UserService {
     }
     this._logger.info(this.role);
   }
+  private setProfile(newProfile: Profile){
+    this._logger.debug("Setting new profile");
+    this._logger.debug(newProfile);
+    this.profileFuture.next(newProfile);
+    this.profileFuture.complete();
+    this._logger.debug("Future completed");
+    this._logger.debug(this.profileFuture);
+    this.profile = newProfile;
+    this.profileFuture = new AsyncSubject();
+  }
+
   private setUser(): void {
     if (this.gapiLoaded) {
       this._logger.debug('gAPI loaded');
@@ -128,7 +143,7 @@ export class UserService {
             query: ProfileQuery})
             .subscribe(
               ({data}) => {
-                this.profile = data.currentProfile;
+                this.setProfile(data.currentProfile);
                 this.role = this.getUserRole();
               }
             );
@@ -140,18 +155,15 @@ export class UserService {
     }
   }
 
-  public updateUserInfo(new_profile: Profile){
-    let result = new AsyncSubject();
+  public updateUserInfo(new_profile: Profile): AsyncSubject<Profile>{
     this.apollo.mutate<updateProfileResponse>({
       mutation: ProfileUpdate,
       variables: new_profile
     }).subscribe(({data})=> {
       this._logger.debug(data);
-      this.profile = data.profileUpdate.user;
-      result.next(true);
-      result.complete();
+      this.setProfile(data.profileUpdate.user);
     });
-    return result
+    return this.profileFuture
   }
   public signIn(): void {
     this.googleAuth.getAuth()

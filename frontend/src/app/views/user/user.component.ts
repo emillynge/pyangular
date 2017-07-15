@@ -48,25 +48,30 @@ export class UserComponent implements OnInit {
   }
   form: FormGroup;
 
-  public resetForm(){
-    this._logger.debug("profile name at init");
-    if (isUndefined(this.userService.profile)){
-      sleep(100).then(value => this.resetForm())
-    } else {
-      this._logger.debug(this.userService.profile.name);
+  private resetFormwithProfile(profile: Profile){
+    this._logger.debug("Resetting form with:");
+    this._logger.debug(profile);
+    this.form = this.fb.group({
+      name: profile.name,
+      email: profile.email,
+      role: profile.role,
+      gid: profile.gid,
+    })
+  }
 
-      this.form = this.fb.group({
-        name: this.userService.profile.name,
-        email: this.userService.profile.email,
-        role: this.userService.profile.role,
-        gid: this.userService.profile.gid,
-      })
+  public resetForm(){
+    this._logger.debug("Resetting form");
+    if (isUndefined(this.userService.profile)){
+      this._logger.debug("Wait for future ${this.userService.profileFuture}");
+      this.userService.profileFuture.subscribe(value => this.resetFormwithProfile(value));
+    } else {
+      this._logger.debug("Reset immediately");
+      this.resetFormwithProfile(this.userService.profile);
     }
   }
 
   ngOnInit() {
     this.resetForm();
-
   }
 
   formReady(): boolean{
@@ -97,6 +102,6 @@ export class UserComponent implements OnInit {
 
   editRole(): Role {
     return this.userService.roles.get(this.form.value.role)
-}
+  }
 
 }
