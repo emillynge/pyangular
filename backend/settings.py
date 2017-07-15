@@ -1,5 +1,8 @@
+"""
+Handle import of environment variables and set variables from files
 
-# settings.py
+also holds objects for easy access to variables used by the app
+"""
 import os
 import pathlib
 from dotenv import load_dotenv

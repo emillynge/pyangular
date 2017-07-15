@@ -1,9 +1,14 @@
+"""
+Monkey patching of aiogcd to suit specific tastes and implementation of some datastore entities
+"""
+# builtin imports
 import asyncio
 from enum import IntEnum
 from functools import partial
-from uvloop import loop
+from typing import Optional, Union, Dict, Awaitable
+_Union = type(Union)
 
-import aiogcd
+# pip imports
 from aiogcd.connector import GcdConnector as _GcdConnector
 from aiogcd.connector.key import Key
 from aiogcd.orm import GcdModel as _GcdModel
@@ -14,33 +19,31 @@ from aiogcd.orm.model import _ModelClass, _PropertyClass
 from aiogcd.orm.properties import KeyValue as KeyValue
 from aiogcd.orm.properties import StringValue, IntegerValue, DoubleValue, BooleanValue, ArrayValue, JsonValue
 from aiohttp import ClientSession
-from typing import Optional, Union, Dict, Awaitable
 
-_Union = type(Union)
-
-try:
-    import ujson
-
-    json_serializer = ujson.dumps
-
-except ImportError:
-    import json
-
-    json_serializer = json.dumps
-
+# relative imports
 from .googleauth import Credentials
 
 
+# Try to use ujson for speed, otherwise use standard json
+try:
+    import ujson
+    json_serializer = ujson.dumps
+except ImportError:
+    import json
+    json_serializer = json.dumps
+
+
 class Token:
+    """
+    Wrapper around Credentials to replace aiogcd Token
+    """
     def __init__(self, parent: 'GcdConnector', credentials: Credentials):
         self.parent = parent
         self.credentials = credentials
         self._lock = asyncio.Lock()
 
     async def get(self):
-        """Returns the access token. If _refresh_ts is passed, the token will
-    be refreshed. A lock is used to prevent refreshing the token twice.
-
+        """Returns the access token. check for validity, else try to refres token
     :return: Access token (string)
     """
 
@@ -55,17 +58,29 @@ class Token:
 
 
 class GcdConnector(_GcdConnector):
+    """
+    Monkeypatch aiogcd implementation to suit taste
+    """
+
     def __init__(
             self,
             project_id,
             credentials: Credentials
     ):
+        """
+        only take project as credentials as input. rest can be derived
+        :param project_id:
+        :param credentials:
+        """
 
         self.project_id = project_id
+        # wrap creds in token
         self._token = Token(
             self,
             credentials
         )
+
+        # init empty session. Must use __aenter__ to get a session.
         self._session: ClientSession = None
 
         self._run_query_url = DATASTORE_URL.format(
@@ -77,6 +92,10 @@ class GcdConnector(_GcdConnector):
             method='commit')
 
     async def get_session(self):
+        """
+        return a session that is already authorized by credentials
+        :return:
+        """
         if not self._token.valid:
             self._session._default_headers.update(**(await self._get_headers()))
         return self._session
@@ -90,6 +109,7 @@ class GcdConnector(_GcdConnector):
 
     async def commit(self, mutations):
         """Commit mutations.
+        reimplementation with shared session
 
     The only supported commit mode is NON_TRANSACTIONAL.
 
@@ -124,6 +144,7 @@ class GcdConnector(_GcdConnector):
 
     async def run_query(self, data):
         """Return entities by given query data.
+        Reimplementation with shared session, and as an async generator
 
     :param data: see the following link for the data format:
         https://cloud.google.com/datastore/docs/reference/rest/
@@ -178,6 +199,7 @@ class GcdConnector(_GcdConnector):
         """Returns an entity object for the given key or None in case no
     entity is found.
 
+    Reimplementation with shared session.
     :param key: Key object
     :return: Entity object or None.
     """
@@ -217,8 +239,11 @@ class GcdConnector(_GcdConnector):
 
             return Entity(entity_res['entity'])
 
+
     async def get_entities(self, data):
         """Return entities by given query data.
+
+        Reimplement to use async generator
 
     :param data: see the following link for the data format:
         https://cloud.google.com/datastore/docs/reference/rest/
@@ -231,6 +256,21 @@ class GcdConnector(_GcdConnector):
             results.append(Entity(result['entity']))
 
         return results
+
+    async def get_entities_gen(self, data):
+        """Return entities by given query data.
+
+        Reimplement as async generator
+
+    :param data: see the following link for the data format:
+        https://cloud.google.com/datastore/docs/reference/rest/
+            v1/projects/runQuery
+    :return: list containing Entity objects.
+    """
+
+        results = list()
+        async for result in self.run_query(data):
+            yield results.append(Entity(result['entity']))
 
 
 class GcdModelMeta(_ModelClass):
@@ -248,9 +288,10 @@ class GcdModelMeta(_ModelClass):
         return dict()
 
     def __new__(cls, klass_name, bases, namespace: dict, **kwds):
-        if klass_name == 'GcdModel':
+        if klass_name == 'GcdModel':  # pass baseclass thorugh with no meddling
             return type.__new__(cls, klass_name, bases, dict(namespace))
 
+        # rebuild namespace from scratch to match what _ModelClass expects
         new_namespace = _PropertyClass()
 
         for name, annotation in namespace.get('__annotations__', dict()).items():
@@ -298,6 +339,9 @@ class GcdModelMeta(_ModelClass):
 
 
 class PopulatedFilter:
+    """
+    Wrapper around a filter such that any method called on filter is prepopulated with a connector as first arg
+    """
     def __init__(self, connector: GcdConnector, filter: Filter):
         self._connector = connector
         self._filter = filter
@@ -308,13 +352,30 @@ class PopulatedFilter:
 
 
 class GcdModel(_GcdModel, metaclass=GcdModelMeta):
+    """
+    Subclass aiogcd GcdModel to get more functionality
+
+    primarily this consist of using a shared connector that is set on the class,
+    rather than passing one with every method call
+    """
     connector: GcdConnector = None
 
     @classmethod
     def set_connector(cls, connector: GcdConnector):
+        """
+        Set a connector to be used for all requests made by instances of this class
+        :param connector:
+        :return:
+        """
         cls.connector = connector
 
     def __init__(self, *args, key=None, **kwargs):
+        """
+        Attempt to produce a key for the object before sending arguments to superclass
+        :param args:
+        :param key:
+        :param kwargs:
+        """
         if args or 'entity' in kwargs:
             super().__init__(*args, key=key, **kwargs)
             return
@@ -325,18 +386,23 @@ class GcdModel(_GcdModel, metaclass=GcdModelMeta):
             elif isinstance(key, int):
                 key = Key(self.__kind__, key, project_id=self.connector.project_id)
             elif isinstance(key, str):
+                # string key is assumed to be a keystring (ks)
                 key = Key(ks=key)
             else:
                 raise TypeError(f'Unknown type for key: {type(key)}')
         else:
             try:
+                # assume that a project_id can be found in class connector
                 key = Key(self.__kind__, None, project_id=self.connector.project_id)
             except AttributeError:
+                # not connector found, get project_id from kwargs. If it fails let it throw exception
+                # since we cannot instantiate without key
                 key = Key(self.__kind__, None, project_id=kwargs['project_id'])
 
         super().__init__(key=key, **kwargs)
 
     async def put(self):
+        # API taken from ndb where put is called when you want to save stuff in an entity
         try:
             await self.connector.upsert_entity(self)
         except AttributeError as exc:
@@ -344,14 +410,31 @@ class GcdModel(_GcdModel, metaclass=GcdModelMeta):
 
     @classmethod
     def filter(cls, *filters, has_ancestor=None, key=None) -> Filter:
+        """
+        Wrap filter method such that is comes prepopulated with a connector
+        :param filters:
+        :param has_ancestor:
+        :param key:
+        :return:
+        """
         return PopulatedFilter(cls.connector,
                                super().filter(*filters, has_ancestor=has_ancestor, key=None))
 
     @classmethod
     async def get_by_key(cls, key: Key):
+        """
+        Get a entity based on a key
+        :param key:
+        :return:
+        """
         return await cls.filter(key=key).get_entity()
 
     def serializable_dict(self, key_as=None):
+        """
+        Reimplement to use get_value_for_serializing, to ensure json decodeable objects
+        :param key_as:
+        :return:
+        """
         data = {
             prop.name: self._serialize_value(prop.get_value_for_serializing(self))
             for prop in self.model_props.values()
@@ -365,6 +448,10 @@ class GcdModel(_GcdModel, metaclass=GcdModelMeta):
 
 
 class EntityValue(KeyValue):
+    """
+    New Value that holds an entity based on a passed Key
+    Makes it possible to directly call an entity on another entity
+    """
     def __init__(self, default=None, required=True, entity_type=GcdModel):
         super().__init__(default=default, required=required)
         self.entity_type = entity_type
@@ -386,6 +473,12 @@ class EntityValue(KeyValue):
         self.entity_cache[new_value] = value
 
     def get_value(self, model):
+        """
+        Check cache for entity, and wrap in future to be awaited.
+        If not cached, return async wrapper that returns object and caches result
+        :param model:
+        :return:
+        """
         key = super().get_value(model)
         try:
             value = self.entity_cache[key]
@@ -403,12 +496,10 @@ class EntityValue(KeyValue):
         return super().get_value(model)
 
 
-def entity(klass):
-    setattr(klass, '__kind__', klass.__name__)
-    return klass
-
-
 class Roles(IntEnum):
+    """
+    Enumaration of possible roles (access levels)
+    """
     ADMIN = 10
     REGISTERED = 5
     UNREGISTERED = 1
@@ -416,6 +507,9 @@ class Roles(IntEnum):
 
 
 class DemoUser(GcdModel):
+    """
+    A simple user entity with google access_token, a google id, name, email and a role within the system.
+    """
     name: Optional[str]
     email: str
     gid: str
@@ -424,14 +518,30 @@ class DemoUser(GcdModel):
 
     @property
     def role_as_enum(self):
+        """
+        Return the role in terms of the Roles enumaration
+        :return:
+        """
         return Roles(self.role)
 
     @classmethod
-    async def get_by_auth_session(cls, session: ClientSession):
+    async def new_from_authorized_session(cls, session: ClientSession):
+        """
+        get a new User Entity from a session authorized with a google user token.
+        :param session:
+        :return:
+        """
+
+        # ask google who this token belongs to
         async with session.get(f"GET https://www.googleapis.com/plus/v1/people/me") as resp:
             data = await resp.json()
             return cls(name=data['displayName'],
                        gid=data['id'],
                        email=data['emails'][0],
-                       token="",
+                       token=session._default_headers['Authorization'].split('Bearer ')[-1],
                        role=Roles.UNREGISTERED)
+
+    @property
+    def authorized_session(self):
+        return ClientSession(headers={'Authorization': 'Bearer {}'.format(self.token),
+                                      'Content-Type': 'application/json'})
