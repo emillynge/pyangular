@@ -138,7 +138,7 @@ async def graphql_handler(request: web.Request) -> web.Response:
 
         # populate user_entity if needed
         if user_entity is None:
-            user_entity = User(gid=gid, token=access_token, role=Roles.UNREGISTERED)
+            user_entity = User(gid=gid, token=access_token, role=Roles.UNREGISTERED, email=token_email)
             await user_entity.put()
         elif user_entity.token != access_token:
             user_entity.token = access_token
