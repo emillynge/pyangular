@@ -47,3 +47,5 @@ Thumbs.db
 /backend/js/
 /frontend/src/environments/environment.prod.ts
 /frontend/src/environments/environment.dev.ts
+
+.venv
