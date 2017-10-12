@@ -1,14 +1,15 @@
 import { Injectable } from '@angular/core';
-import {GoogleApiService, GoogleAuthService} from "ng-gapi";
+import {GoogleApiConfig, GoogleApiModule, GoogleApiService, GoogleAuthService} from "ng-gapi";
+import AuthorizeResponse = gapi.auth2.AuthorizeResponse
 import GoogleUser = gapi.auth2.GoogleUser;
 import * as _ from "lodash";
-import {isUndefined} from "util";
+import {isNullOrUndefined, isUndefined} from "util";
 import { Logger } from '@nsalaun/ng-logger';
 import { Http, Response, URLSearchParams } from '@angular/http';
 import { Apollo } from 'apollo-angular';
 import gql from 'graphql-tag';
 import {AsyncSubject} from "rxjs/AsyncSubject";
-
+import { environment } from '../../environments/environment';
 
 export interface Profile {
   gid: string;
@@ -21,6 +22,8 @@ export interface Profile {
 interface QueryResponse {
   currentProfile: Profile;
 }
+
+
 
 const ProfileQuery = gql`
   query currentProfile{
@@ -47,6 +50,20 @@ const ProfileUpdate = gql`
     }
   }
 `;
+
+const TokenRefresh = gql`
+mutation tokenRefresh($code: String!) {
+  tokenRefresh(code: $code) {
+    user {
+      gid
+      name
+      email
+      role
+      }
+      ok
+    }
+  }
+`
 
 interface updateProfileResponse {
   profileUpdate: {ok: boolean, user: Profile};
@@ -137,6 +154,7 @@ export class UserService {
           sessionStorage.setItem('access_token', token);
           sessionStorage.setItem('email', email);
           sessionStorage.setItem('gid', gid);
+          this._logger.debug(token);
 
           this._logger.debug('calling api');
           this.apollo.watchQuery<QueryResponse>({
@@ -168,7 +186,20 @@ export class UserService {
   public signIn(): void {
     this.googleAuth.getAuth()
       .subscribe((auth) => {
-        auth.signIn();
+        auth.grantOfflineAccess({scope: environment.scope.join(" "),
+        prompt: "consent"}).then((resp: AuthorizeResponse) => {
+            this._logger.debug(resp.code);
+            this.apollo.mutate<updateProfileResponse>({
+              mutation: TokenRefresh,
+              variables: {code: resp.code}
+              }
+            ).subscribe( ({data}) => {
+                this._logger.debug(data)
+              }
+
+            )
+          }
+        );
       });
   }
 
@@ -176,6 +207,7 @@ export class UserService {
     this.googleAuth.getAuth()
       .subscribe((auth) => {
         auth.signIn({prompt: "select_account"});
+        this._logger.debug(auth.currentUser.get().getAuthResponse().access_token);
       });
   }
 
@@ -221,7 +253,7 @@ export class UserService {
       return this.signedOutRole;
     }
 
-    if (isUndefined(this.profile)){
+    if (isNullOrUndefined(this.profile)){
       return this.unregisteredRole
     }
 

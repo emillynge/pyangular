@@ -1,40 +1,24 @@
 import asyncio
+import logging
 import re
 from typing import NamedTuple, Optional, Awaitable
+
 import aiohttp
-import google.auth.transport.requests
-import google.oauth2.credentials
 import graphql
-import logging
-import uvloop
-import aiogcd.connector.connector
 from aiohttp import web
-from google.auth._default import _load_credentials_from_file
-from graphql.execution.executors.asyncio import AsyncioExecutor
 from graphql.error.format_error import format_error
-import json
-from .datastore import GcdConnector, Roles
-from .datastore import DemoUser as User
-from .googleauth import ServiceAccount, verify_oauth2_token_simple
-from .settings import BaseEnviron
+from graphql.execution.executors.asyncio import AsyncioExecutor
+
+from .datastore import Roles
+from .googleauth import verify_oauth2_token_simple, TokenInfo
 from .graph import GRAPHENE_SCHEMA, Caller
 
-request = google.auth.transport.requests.Request()
+from .common import (BaseEnviron,
+                     GCD_CONNECTOR,
+                     VANILLA_SESSION,
+                     ANONYMOUS,
+                     User)
 
-loop = uvloop.new_event_loop()
-asyncio.set_event_loop(loop)
-
-ROOT_ACCOUNT = ServiceAccount(*_load_credentials_from_file(BaseEnviron.SERVICE_ACCOUNT_SECRETS_PATH))
-with open(BaseEnviron.WEBAPP_SECRETS_PATH) as fp:
-    s = fp.read()
-    BaseEnviron.WEBAPP_CLIENT_ID = json.loads(s)['web']['client_id']
-
-(GCD_CREDENTIALS,) = ROOT_ACCOUNT.sub_credentials(aiogcd.connector.connector.DEFAULT_SCOPES)
-VANILLA_SESSION = aiohttp.ClientSession()
-ANONYMOUS = User(name="anonymous", gid="", role=Roles.SIGNED_OUT, token="", project_id=ROOT_ACCOUNT.project_name,
-                 email='anon@ymo.us')
-GCD_CONNECTOR = GcdConnector(ROOT_ACCOUNT.project_name, GCD_CREDENTIALS)
-User.set_connector(GCD_CONNECTOR)
 app = web.Application()
 
 
@@ -51,7 +35,7 @@ def add_routes(*routes, GET=True, POST=False):
     return decorator
 
 
-@add_routes('/', '/user')
+@add_routes('/', '/user', '/project')
 def index(*args):
     INDEX_BODY = BaseEnviron.ANGULAR_BUNDLE_PATH.joinpath('index.html').read_text()
     INDEX_BODY = re.sub('"(\w+\.bundle.js)"', '"app/\g<1>"', INDEX_BODY).encode()
@@ -115,11 +99,12 @@ async def graphql_handler(request: web.Request) -> web.Response:
             return web.Response(status=403, text=msg, reason=msg)
 
         try:
-            user_entity, (token_uid, token_email) = await asyncio.gather(
+            user_entity, token_info = await asyncio.gather(
                 User.filter(User.gid == gid).get_entity(),
                 verify_oauth2_token_simple(access_token, VANILLA_SESSION, BaseEnviron.WEBAPP_CLIENT_ID),
             )
-            if gid != token_uid:
+            token_info: TokenInfo
+            if gid != token_info.uid:
                 msg = f'Token was not issued for the calling user'
                 logging.warning(msg)
                 return web.Response(status=403, text=msg, reason=msg)
@@ -138,7 +123,7 @@ async def graphql_handler(request: web.Request) -> web.Response:
 
         # populate user_entity if needed
         if user_entity is None:
-            user_entity = User(gid=gid, token=access_token, role=Roles.UNREGISTERED, email=token_email)
+            user_entity = User(gid=gid, token=access_token, role=Roles.UNREGISTERED, email=token_info.email)
             await user_entity.put()
         elif user_entity.token != access_token:
             user_entity.token = access_token
@@ -156,7 +141,8 @@ async def graphql_handler(request: web.Request) -> web.Response:
         executor=AsyncioExecutor(loop=request.app.loop),
         variable_values=query.variables,
         operation_name=query.operation_name,
-        return_promise=True)
+        return_promise=True,
+    )
 
     coro = _ensure_future(coro)
 
@@ -169,9 +155,18 @@ async def graphql_handler(request: web.Request) -> web.Response:
 
     if result.errors:
         status = 400
-        resp = dict(errors=[format_error(err) for err in result.errors])
+        resp = dict(errors=list())
         for err in result.errors:
-            logging.warning(f'Query "{query}" resulted in error:\n\t{err}')
+            try:
+                msg = format_error(err)
+                logging.warning(f'Query "{query}" resulted in error:\n\t{msg}')
+            except AttributeError:
+                status = 500
+                msg = f'Query encountered exception: {err.__class__.__name__}'
+                logging.warning(f'Query "{query}" encountered exception:\n\t{err}')
+
+            resp['errors'].append(msg)
+
     else:
         status = 200
         resp = dict(data=result.data)

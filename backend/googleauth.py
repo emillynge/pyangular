@@ -16,21 +16,24 @@
 import asyncio
 import json
 import urllib.parse
-from typing import NamedTuple
+from datetime import timedelta, datetime
+from http import HTTPStatus
+from typing import NamedTuple, Awaitable
+import time
 
 import aiohttp
 import uvloop
 from aiohttp import ClientSession, ClientResponse
-from google.auth import exceptions
+from google.auth import exceptions, _helpers
 from google.auth import jwt
 from google.oauth2 import service_account
-from google.oauth2.service_account import Credentials as _Credentials
-from google.oauth2._client import _JWT_GRANT_TYPE, _URLENCODED_CONTENT_TYPE, _handle_error_response, _parse_expiry
-from http import HTTPStatus
-from datetime import timedelta, datetime
+from google.oauth2._client import _JWT_GRANT_TYPE, _URLENCODED_CONTENT_TYPE, _handle_error_response, _parse_expiry, \
+    _REFRESH_GRANT_TYPE
+from google.oauth2.service_account import Credentials as _Credentials, _DEFAULT_TOKEN_LIFETIME_SECS
 
 # The URL that provides public certificates for verifying ID tokens issued
 # by Google's OAuth 2.0 authorization server.
+
 
 _GOOGLE_OAUTH2_CERTS_URL = 'https://www.googleapis.com/oauth2/v1/certs'
 
@@ -124,18 +127,43 @@ def verify_oauth2_token(id_token, session: ClientSession, audience=None):
         certs_url=_GOOGLE_OAUTH2_CERTS_URL)
 
 
-async def verify_oauth2_token_simple(token, session: ClientSession, audience):
+class TokenInfo(NamedTuple):
+    uid: str
+    email: str
+    expiry: int
+    email_verified: bool
+    scope: str
+    aud: str
+    azp: str
+    offline: bool
+
+    @property
+    def expires_in(self) -> int:
+        return self.expiry - time.time()
+
+
+async def verify_oauth2_token_simple(token, session: ClientSession, audience, scopes: list = None) -> Awaitable[TokenInfo]:
     async with session.get('https://www.googleapis.com/oauth2/v3/tokeninfo',
                            params={'access_token': token}) as resp:
         resp: ClientResponse
         if resp.status != HTTPStatus.OK:
+            c = await resp.content.read()
             raise ValueError(resp.reason)
 
         data = await resp.json()
         if data['aud'] != audience:
             raise ValueError('Token was not issued for this application')
 
-        return data['sub'], data['email']
+        if scopes and not all(scope in data['scope'] for scope in scopes):
+            raise ValueError("Token does not provide requested scopes.")
+
+        data['expiry'] = int(data.pop('exp'))
+        data['uid'] = data.pop('sub')
+        data['email_verified'] = data.pop('email_verified') == 'true'
+        data['offline'] = data.pop('access_type') == "offline"
+        data.pop('expires_in')
+
+        return TokenInfo(**data)
 
 
 def verify_firebase_token(id_token, session: ClientSession, audience=None):
@@ -187,6 +215,7 @@ async def _token_endpoint_request(session: ClientSession, token_uri, body):
     response_data = json.loads(response_body)
 
     return response_data
+
 
 
 async def jwt_grant(session: ClientSession, token_uri, assertion):
@@ -260,3 +289,81 @@ class ServiceAccount(NamedTuple):
 
         loop = uvloop.new_event_loop()
         return loop.run_until_complete(coro())
+
+
+
+def make_refresh_authorization_grant_assertion(token_info: TokenInfo, service_accout: ServiceAccount):
+    """Create the OAuth 2.0 assertion.
+
+    This assertion is used during the OAuth 2.0 grant to acquire an
+    access token.
+
+    Returns:
+        bytes: The authorization grant assertion.
+    """
+    now = _helpers.utcnow()
+    lifetime = timedelta(seconds=_DEFAULT_TOKEN_LIFETIME_SECS)
+    expiry = now + lifetime
+
+    payload = {
+        'iat': _helpers.datetime_to_secs(now),
+        'exp': _helpers.datetime_to_secs(expiry),
+        # The issuer must be the service account email.
+        'iss': service_accout.credentials.service_account_email,
+        # The audience must be the auth token endpoint's URI
+        'aud': token_info.aud,
+        'scope': token_info.scope,
+    }
+
+    # The subject can be a user email for domain-wide delegation.
+    payload.setdefault('sub', token_info.uid)
+
+    token = jwt.encode(service_accout.credentials._signer, payload)
+
+    return token
+
+async def refresh_grant(session: ClientSession, token_uri, refresh_token, client_id, client_secret):
+    """Implements the OAuth 2.0 refresh token grant.
+
+    For more details, see `rfc678 section 6`_.
+
+    Args:
+        request (google.auth.transport.Request): A callable used to make
+            HTTP requests.
+        token_uri (str): The OAuth 2.0 authorizations server's token endpoint
+            URI.
+        refresh_token (str): The refresh token to use to get a new access
+            token.
+        client_id (str): The OAuth 2.0 application's client ID.
+        client_secret (str): The Oauth 2.0 appliaction's client secret.
+
+    Returns:
+        Tuple[str, Optional[str], Optional[datetime], Mapping[str, str]]: The
+            access token, new refresh token, expiration, and additional data
+            returned by the token endpoint.
+
+    Raises:
+        google.auth.exceptions.RefreshError: If the token endpoint returned
+            an error.
+
+    .. _rfc6748 section 6: https://tools.ietf.org/html/rfc6749#section-6
+    """
+    body = {
+        'grant_type': _REFRESH_GRANT_TYPE,
+        'client_id': client_id,
+        'client_secret': client_secret,
+        'refresh_token': refresh_token,
+    }
+
+    response_data = await _token_endpoint_request(session, token_uri, body)
+
+    try:
+        access_token = response_data['access_token']
+    except KeyError:
+        raise exceptions.RefreshError(
+            'No access token in response.', response_data)
+
+    refresh_token = response_data.get('refresh_token', refresh_token)
+    expiry = _parse_expiry(response_data)
+
+    return access_token, refresh_token, expiry, response_data

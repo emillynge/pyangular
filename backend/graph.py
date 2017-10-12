@@ -1,12 +1,23 @@
+import datetime
+import json
 from functools import wraps
 from typing import NamedTuple
 
 import aiohttp
+from aiogcd.connector.timestampvalue import TimestampValue
+import aioauth_client
 
+from backend.common import VANILLA_SESSION
+from backend.settings import BaseEnviron
+from backend.sheets import get_sheet_values, get_project_sheets_iter, get_project_sheets, has_project_access, get_sheet
 from .datastore import DemoUser as User
 from .datastore import Roles
+from . import datastore
 import graphene
-
+from graphene.types.datetime import DateTime
+import asyncio
+import traceback
+import sys
 import google.oauth2.credentials
 
 
@@ -60,9 +71,9 @@ class Profile(graphene.ObjectType):
     gid = graphene.String()
 
     @classmethod
-    def from_entity(cls, entity: User):
-        return cls(**dict((field, getattr(entity, field)) for field in cls._meta.local_fields))
-
+    def from_entity(cls, entity: datastore.Project):
+        cls(**dict((field, getattr(entity, field))
+                   for field in cls._meta.local_fields if hasattr(entity, field)))
 
 async def user_has_email(user: User, email):
     """
@@ -75,6 +86,56 @@ async def user_has_email(user: User, email):
         async with session.get(f"GET https://www.googleapis.com/plus/v1/people/me") as resp:
             data = await resp.json()
             return email in data['emails']
+
+
+class MyOAuthClient(aioauth_client.OAuth2Client):
+    def request(self, method, url, params=None, headers=None, timeout=10, loop=None, **aio_kwargs):
+        """Request OAuth2 resource."""
+        url = self._get_url(url)
+        params = params or {}
+
+        if self.access_token:
+            params[self.access_token_key] = self.access_token
+
+        headers = headers or {
+            'Accept': 'application/json',
+            'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+        }
+        return VANILLA_SESSION.request(method, url, params=params, headers=headers, **aio_kwargs)
+
+
+
+class TokenRefresh(graphene.Mutation):
+    class Input:
+        code = graphene.String(required=True)
+
+    user = graphene.Field(lambda: Profile)
+    ok = graphene.Boolean()
+
+    @staticmethod
+    @require_role(Roles.UNREGISTERED)
+    async def mutate(root, args, context, info):
+        print(args['code'])
+        with open(BaseEnviron.WEBAPP_SECRETS_PATH) as fp:
+            secrets = json.load(fp)
+            client_id = secrets['web']['client_id']
+            client_secret = secrets['web']['client_secret']
+            token_uri = secrets['web']['token_uri']
+            auth_uri = secrets['web']['auth_uri']
+
+        client = MyOAuthClient(client_id=client_id, client_secret=client_secret,
+                                    authorize_url=auth_uri, access_token_url=token_uri)
+        try:
+            token, data = await client.get_access_token(args['code'], redirect_uri='http://localhost:8080')
+        except Exception as exc:
+            traceback.print_exception(*sys.exc_info())
+            raise
+
+        caller: Caller = context['caller']
+        caller.entity.refresh_token = data['refresh_token']
+        caller.entity.token = token
+        await caller.entity.put()
+        return TokenRefresh(user=Profile.from_entity(caller.entity), ok=True)
 
 
 class ProfileUpdate(graphene.Mutation):
@@ -136,6 +197,39 @@ class ProfileUpdate(graphene.Mutation):
         return ProfileUpdate(user=Profile.from_entity(user), ok=ok)
 
 
+class GoogleSheet(graphene.ObjectType):
+    gid = graphene.Int()
+    parent_id = graphene.String()
+    name = graphene.String()
+    link = graphene.String()
+
+    def resolve_link(self, args: dict, context, info):
+        return f'https://docs.google.com/spreadsheets/d/{self.parent_id}/edit#gid={self.gid}'
+
+    async def resolve_name(self, args: dict, context, info):
+        d = await get_sheet(self.parent_id, context['caller'].session, fields=[{'sheets': {'properties': ['sheetId', 'title']}}])
+        for sheet in d['sheets']:
+            if sheet['properties']['sheetId'] == self.gid:
+                return sheet['properties']['title']
+
+
+class GoogleSpreadsheet(graphene.ObjectType):
+    id = graphene.String()
+    sheets = graphene.List(GoogleSheet)
+    name = graphene.String()
+    link = graphene.String()
+
+    def resolve_link(self, args: dict, context, info):
+        return f'https://docs.google.com/spreadsheets/d/{self.id}/edit'
+
+    async def resolve_name(self, args: dict, context, info):
+        return (await get_sheet(self.id, context['caller'].session, fields=[{'properties': 'title'}]))['properties']['title']
+
+    async def resolve_sheets(self, args: dict, context, info):
+        d = await get_sheet(self.id, context['caller'].session, fields=[{'sheets': {'properties': 'sheetId'}}])
+        return [GoogleSheet(gid=sheet['properties']['sheetId'], parent_id=self.id) for sheet in d['sheets']]
+
+
 # Query and Mutation endpoints
 class GrapheneQuery(graphene.ObjectType):
     current_profile = graphene.Field(Profile)
@@ -144,9 +238,9 @@ class GrapheneQuery(graphene.ObjectType):
         user_entity = context['caller'].entity
         return Profile.from_entity(user_entity)
 
-
 class GrapheneMutation(graphene.ObjectType):
     profile_update = ProfileUpdate.Field()
+    token_refresh = TokenRefresh.Field()
 
 
 # 'compile' in to schema

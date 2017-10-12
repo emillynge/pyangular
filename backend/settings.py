@@ -59,6 +59,7 @@ class EnvironMeta(type):
 
 class AppEnviron(metaclass=EnvironMeta):
     APP_NAME: str
+    ENV: str = 'app'
 
 
 class BaseEnviron(metaclass=EnvironMeta):
@@ -76,3 +77,5 @@ def load_env(env='prod'):
     else:
         dotenv_path = pathlib.Path(__file__).parent.joinpath(f'.{env}.env')
     load_dotenv(dotenv_path)
+    if AppEnviron.ENV == 'app':
+        AppEnviron.ENV = env

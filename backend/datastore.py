@@ -3,12 +3,22 @@ Monkey patching of aiogcd to suit specific tastes and implementation of some dat
 """
 # builtin imports
 import asyncio
+import datetime
 from enum import IntEnum
 from functools import partial
-from typing import Optional, Union, Dict, Awaitable
+from typing import Optional, Union, Dict, Awaitable, List
+import json
+
+import pytz
+from json_tricks import TricksPairHook, json_date_time_hook
+from udatetime import TZFixedOffset
+
+from backend.sheets import get_project_sheets, get_sheet_modify_time
+
 _Union = type(Union)
 
 # pip imports
+import udatetime
 from aiogcd.connector import GcdConnector as _GcdConnector
 from aiogcd.connector.key import Key
 from aiogcd.orm import GcdModel as _GcdModel
@@ -16,8 +26,8 @@ from aiogcd.connector.connector import DATASTORE_URL
 from aiogcd.connector.entity import Entity
 from aiogcd.orm.filter import Filter
 from aiogcd.orm.model import _ModelClass, _PropertyClass
-from aiogcd.orm.properties import KeyValue as KeyValue
-from aiogcd.orm.properties import StringValue, IntegerValue, DoubleValue, BooleanValue, ArrayValue, JsonValue
+from aiogcd.orm.properties import (KeyValue as KeyValue, DatetimeValue as _DatetimeValue,
+                                   StringValue, IntegerValue, DoubleValue, BooleanValue, ArrayValue, JsonValue as _JsonValue)
 from aiohttp import ClientSession
 
 # relative imports
@@ -31,6 +41,107 @@ try:
 except ImportError:
     import json
     json_serializer = json.dumps
+
+
+
+class DatetimeValue(_DatetimeValue):
+    def set_value(self, model, value: 'datetime.datetime'):
+        if isinstance(value, datetime.datetime):
+            if value.utcoffset() is None:
+                offset = 0
+            else:
+                offset = value.utcoffset().seconds//60
+            value = udatetime.to_string(value.astimezone(TZFixedOffset(offset)) + datetime.timedelta(hours=2))
+
+        super().set_value(model, value)
+
+    def get_value(self, model):
+        value = super().get_value(model)
+        return udatetime.from_string(str(value)) if value is not None else None
+
+import json_tricks
+class JsonValue(_JsonValue):
+    encoder = json_tricks.TricksEncoder
+    obj_encoders = [json_tricks.json_date_time_encode]
+    decoder_hooks = [json_date_time_hook]
+
+    def set_value(self, model, value):
+        self.check_value(value)
+        try:
+            data = json_tricks.dumps(value, obj_encoders=self.obj_encoders)
+        except TypeError as e:
+            raise TypeError('Value for property {!r} could not be parsed: {}'
+                            .format(self.name, e))
+        model.__dict__['__orig__{}'.format(self.name)] = value
+        super(_JsonValue, self).set_value(model, data)
+
+    def get_value(self, model):
+        key = '__orig__{}'.format(self.name)
+
+        if key not in model.__dict__:
+            try:
+                model.__dict__[key] = json_tricks.loads(model.__dict__[self.name])#,
+                                                        #obj_pairs_hooks=json_tricks.nonp.DEFAULT_NONP_HOOKS
+                                                        #obj_pairs_hooks=[json_tricks.decoders.json_date_time_hook,
+                                                        #                 json_tricks.decoders.numeric_types_hook
+                                                        #                 ]
+                                                        #)
+            except Exception as e:
+                raise Exception(
+                    'Error reading property {!r} '
+                    '(see above exception for more info).'
+                        .format(self.name)) from e
+
+        return model.__dict__[key]
+
+
+class EntityValue(KeyValue):
+    """
+    New Value that holds an entity based on a passed Key
+    Makes it possible to directly call an entity on another entity
+    """
+    def __init__(self, default=None, required=True, entity_type='GcdModel'):
+        super().__init__(default=default, required=required)
+        self.entity_type = entity_type
+        self.entity_cache: Dict[Key, GcdModel] = dict()
+
+    def set_value(self, model, value: 'GcdModel'):
+        try:
+            new_value = value.key
+        except AttributeError:
+            if isinstance(value, KeyValue):
+                pass
+            elif not isinstance(value, self.entity_type):
+                raise TypeError(
+                    'Expecting an value of sub-type \'GcdModel\' for property {!r} '
+                    'but received type {!r}.'
+                        .format(self.name, value.__class__.__name__))
+
+        super().set_value(model, new_value)
+        self.entity_cache[new_value] = value
+
+    def get_value(self, model):
+        """
+        Check cache for entity, and wrap in future to be awaited.
+        If not cached, return async wrapper that returns object and caches result
+        :param model:
+        :return:
+        """
+        key = super().get_value(model)
+        try:
+            value = self.entity_cache[key]
+
+            async def fetch():
+                return value
+
+        except KeyError:
+            async def fetch():
+                value = await self.entity_type.get_by_key(key)
+                self.entity_cache[key] = value
+        return fetch()
+
+    def get_value_for_serializing(self, model):
+        return super().get_value(model)
 
 
 class Token:
@@ -101,11 +212,11 @@ class GcdConnector(_GcdConnector):
         return self._session
 
     async def __aenter__(self):
-        self._session = ClientSession(headers=await self._get_headers(), json_serialize=json_serializer)
+        self._session = ClientSession(headers=await self._get_headers())#, json_serializer=json_serializer)
         return self
 
     async def __aexit__(self, *args):
-        await self._session.close()
+        self._session.close()
 
     async def commit(self, mutations):
         """Commit mutations.
@@ -281,7 +392,8 @@ class GcdModelMeta(_ModelClass):
         bool: BooleanValue,
         list: ArrayValue,
         dict: JsonValue,
-
+        Dict: JsonValue,
+        datetime.datetime: DatetimeValue,
     }
 
     def __prepare__(metacls, *_):
@@ -303,6 +415,16 @@ class GcdModelMeta(_ModelClass):
                 annotation = annotation
 
             try:
+                default = namespace.pop(name)
+                if callable(default):  # it is a function!
+                    new_namespace[name] = default
+                    continue
+
+                required = False
+            except KeyError:
+                default = None
+
+            try:
                 property_type = cls.annotation2gcd_type[annotation]
             except KeyError:
                 if issubclass(annotation, Awaitable):
@@ -320,11 +442,7 @@ class GcdModelMeta(_ModelClass):
                     else:
                         continue
 
-            try:
-                default = namespace.pop(name)
-                required = False
-            except KeyError:
-                default = None
+
 
             value = property_type(default=default, required=required, **extra)
             if not hasattr(value, 'get_value_for_serializing'):
@@ -408,6 +526,9 @@ class GcdModel(_GcdModel, metaclass=GcdModelMeta):
         except AttributeError as exc:
             raise ValueError('Connector not set. In order to use put, you must call set_connector first!') from exc
 
+    def __contains__(self, item):
+        return item in self._properties
+
     @classmethod
     def filter(cls, *filters, has_ancestor=None, key=None) -> Filter:
         """
@@ -447,54 +568,6 @@ class GcdModel(_GcdModel, metaclass=GcdModelMeta):
         return data
 
 
-class EntityValue(KeyValue):
-    """
-    New Value that holds an entity based on a passed Key
-    Makes it possible to directly call an entity on another entity
-    """
-    def __init__(self, default=None, required=True, entity_type=GcdModel):
-        super().__init__(default=default, required=required)
-        self.entity_type = entity_type
-        self.entity_cache: Dict[Key, GcdModel] = dict()
-
-    def set_value(self, model, value: 'GcdModel'):
-        try:
-            new_value = value.key
-        except AttributeError:
-            if isinstance(value, KeyValue):
-                pass
-            elif not isinstance(value, self.entity_type):
-                raise TypeError(
-                    'Expecting an value of sub-type \'GcdModel\' for property {!r} '
-                    'but received type {!r}.'
-                        .format(self.name, value.__class__.__name__))
-
-        super().set_value(model, new_value)
-        self.entity_cache[new_value] = value
-
-    def get_value(self, model):
-        """
-        Check cache for entity, and wrap in future to be awaited.
-        If not cached, return async wrapper that returns object and caches result
-        :param model:
-        :return:
-        """
-        key = super().get_value(model)
-        try:
-            value = self.entity_cache[key]
-
-            async def fetch():
-                return value
-
-        except KeyError:
-            async def fetch():
-                value = await self.entity_type.get_by_key(key)
-                self.entity_cache[key] = value
-        return fetch()
-
-    def get_value_for_serializing(self, model):
-        return super().get_value(model)
-
 
 class Roles(IntEnum):
     """
@@ -514,6 +587,7 @@ class DemoUser(GcdModel):
     email: str
     gid: str
     token: str
+    refresh_token: Optional[str]
     role: int
 
     @property
@@ -545,3 +619,28 @@ class DemoUser(GcdModel):
     def authorized_session(self):
         return ClientSession(headers={'Authorization': 'Bearer {}'.format(self.token),
                                       'Content-Type': 'application/json'})
+
+
+class NonExpireableData(GcdModel):
+    data: Optional[dict]
+    last_modified: Optional[datetime.datetime]
+    name: str
+    id: str
+
+    async def is_expired(self, session: ClientSession):
+        return False
+
+
+class GoogleSheetData(GcdModel):
+    data: Optional[dict]
+    spreadsheet_id: str
+    sheet_id: Optional[int]
+    last_modified: Optional[datetime.datetime]
+    name: str
+
+    async def is_expired(self, session: ClientSession):
+        if 'last_modified' not in self:
+            return True
+
+        modified = await get_sheet_modify_time(self.spreadsheet_id, session)
+        return self.last_modified < modified

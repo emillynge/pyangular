@@ -6,5 +6,9 @@
 export const environment = {
   production: false,
   googleClientId: "INSERT_CLIENT_ID_HERE",
-  applicationName: "PyAngular"
+  applicationName: "PyAngular",
+  scope: [
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/spreadsheets",
+  ],
 };

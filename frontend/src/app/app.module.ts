@@ -4,11 +4,11 @@ import { FormsModule } from '@angular/forms';
 import { HttpModule } from '@angular/http';
 import { UserService} from "./user/user.service";
 import { AppComponent } from './app.component';
-import {GoogleApiModule} from "ng-gapi";
+import { GoogleApiModule, NG_GAPI_CONFIG, ClientConfig} from "ng-gapi";
 import { BrowserAnimationsModule } from '@angular/platform-browser/animations';
 import {
   MdButtonModule, MdCardModule, MdMenuModule, MdToolbarModule, MdIconModule,
-  MdInputModule, MdTooltipModule
+  MdInputModule, MdTooltipModule, MdProgressSpinnerModule,
 } from '@angular/material';
 import { NgLoggerModule, Level } from '@nsalaun/ng-logger';
 import { ApolloClient, createNetworkInterface } from 'apollo-client';
@@ -18,6 +18,7 @@ import { UserComponent } from './views/user/user.component';
 import {AppRoutingModule} from "./app-routing.module";
 import { ReactiveFormsModule } from '@angular/forms';
 import { environment } from '../environments/environment';
+import {ProjectComponent} from "./views/project/project.component";
 
 const networkInterface = createNetworkInterface('/graphql');
 
@@ -45,10 +46,17 @@ export function provideClient(): ApolloClient {
   return client;
 }
 
+let gapiClientConfig: ClientConfig = {
+  clientId: environment.googleClientId,
+  discoveryDocs: ["https://www.googleapis.com/discovery/v1/apis/drive/v3/rest"],
+  scope: environment.scope.join(" ")
+};
+
+
 @NgModule({
   declarations: [
     AppComponent,
-    UserComponent
+    UserComponent,
   ],
   imports: [
     NgLoggerModule.forRoot(Level.DEBUG),
@@ -65,13 +73,11 @@ export function provideClient(): ApolloClient {
     MdTooltipModule,
     MdToolbarModule,
     MdIconModule,
+    MdProgressSpinnerModule,
     ApolloModule.forRoot(provideClient),
-    GoogleApiModule.setConfig({
-    clientId: environment.googleClientId,
-    discoveryDocs: ["https://www.googleapis.com/discovery/v1/apis/drive/v3/rest"],
-    scope: [
-        "https://www.googleapis.com/auth/drive.readonly"
-    ].join(" ")
+    GoogleApiModule.forRoot({
+      provide: NG_GAPI_CONFIG,
+      useValue: gapiClientConfig,
 })
   ],
   providers: [

@@ -62,7 +62,7 @@ export class UserComponent implements OnInit {
   public resetForm(){
     this._logger.debug("Resetting form");
     if (isUndefined(this.userService.profile)){
-      this._logger.debug("Wait for future ${this.userService.profileFuture}");
+      this._logger.debug(`Wait for future ${this.userService.profileFuture}`);
       this.userService.profileFuture.subscribe(value => this.resetFormwithProfile(value));
     } else {
       this._logger.debug("Reset immediately");
