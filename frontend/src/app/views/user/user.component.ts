@@ -13,31 +13,31 @@ function sleep(ms = 0) {
 @Component({
   selector: 'app-user',
   template: `
-    <md-card>
-      <md-card-title>Account Information</md-card-title>
+    <mat-card>
+      <mat-card-title>Account Information</mat-card-title>
       
       <div *ngIf="formReady()" >
       <form  (ngSubmit)="onSubmit(form)" [formGroup]="form" >
-        <md-input-container>
-          <input mdInput placeholder="Name" type="text" formControlName="name">
-        </md-input-container>
+        <mat-input-container>
+          <input matInput placeholder="Name" type="text" formControlName="name">
+        </mat-input-container>
         
-        <md-input-container>
-          <input mdInput placeholder="Email" type="text" formControlName="email">
-        </md-input-container>
-        <md-input-container mdTooltip="{{editRole().description}}">
-          <input mdInput placeholder="Role" value="{{editRole().name}}">
-        </md-input-container>
-      <button *ngIf="profileChanged() == 1"  md-raised-button type="submit">
+        <mat-input-container>
+          <input matInput placeholder="Email" type="text" formControlName="email">
+        </mat-input-container>
+        <mat-input-container matTooltip="{{editRole().description}}">
+          <input matInput placeholder="Role" value="{{editRole().name}}" disabled>
+        </mat-input-container>
+      <button *ngIf="profileChanged() == 1"  mat-raised-button type="submit">
         Save
       </button>
-      <button *ngIf="profileChanged() == 0"  disabled md-button>
+      <button *ngIf="profileChanged() == 0"  disabled mat-button>
         Save
       </button>
       </form>
 
       </div>
-    </md-card>`,
+    </mat-card>`,
   styles: [],
 })
 export class UserComponent implements OnInit {

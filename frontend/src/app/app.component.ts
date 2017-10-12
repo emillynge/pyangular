@@ -1,6 +1,6 @@
 import { Component } from '@angular/core';
 import { UserService, Role } from "./user/user.service";
-import {MdIconRegistry} from "@angular/material";
+import {MatIconRegistry} from "@angular/material";
 import {DomSanitizer} from "@angular/platform-browser";
 import {Router} from "@angular/router";
 import {environment } from "../environments/environment"
@@ -10,7 +10,7 @@ import {environment } from "../environments/environment"
   selector: 'app-root',
   templateUrl: './app.component.html',
   styleUrls: ['./app.component.css'],
-  viewProviders: [MdIconRegistry],
+  viewProviders: [MatIconRegistry],
 })
 
 export class AppComponent {
@@ -19,7 +19,7 @@ export class AppComponent {
   public us: UserService;
 
   constructor(private userService: UserService,
-              iconReg: MdIconRegistry,
+              iconReg: MatIconRegistry,
               sanitizer: DomSanitizer,
               private router: Router,
               ) {

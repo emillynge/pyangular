@@ -7,9 +7,9 @@ import aiohttp
 from aiogcd.connector.timestampvalue import TimestampValue
 import aioauth_client
 
-from backend.common import VANILLA_SESSION
-from backend.settings import BaseEnviron
-from backend.sheets import get_sheet_values, get_project_sheets_iter, get_project_sheets, has_project_access, get_sheet
+from .common import VANILLA_SESSION
+from .settings import BaseEnviron
+from .sheets import get_sheet_values, get_sheet
 from .datastore import DemoUser as User
 from .datastore import Roles
 from . import datastore
@@ -71,8 +71,8 @@ class Profile(graphene.ObjectType):
     gid = graphene.String()
 
     @classmethod
-    def from_entity(cls, entity: datastore.Project):
-        cls(**dict((field, getattr(entity, field))
+    def from_entity(cls, entity):
+        return cls(**dict((field, getattr(entity, field))
                    for field in cls._meta.local_fields if hasattr(entity, field)))
 
 async def user_has_email(user: User, email):

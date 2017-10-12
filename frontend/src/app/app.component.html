@@ -1,33 +1,33 @@
-<md-toolbar color="primary">
+<mat-toolbar color="primary">
   <span>{{title}}</span>
   <span class="example-fill-remaining-space"></span>
   <span>
-    <button md-button [mdMenuTriggerFor]="accountMenu">
-      <md-icon *ngIf="us.role.accessLevel < 1" >
+    <button mat-button [matMenuTriggerFor]="accountMenu">
+      <mat-icon *ngIf="us.role.accessLevel < 1" >
         person_outline
-      </md-icon>
-      <md-icon *ngIf="us.role.accessLevel < 10 && us.role.accessLevel >= 1" >
+      </mat-icon>
+      <mat-icon *ngIf="us.role.accessLevel < 10 && us.role.accessLevel >= 1" >
         person
-      </md-icon>
-      <md-icon *ngIf="us.role.accessLevel >= 10" >
+      </mat-icon>
+      <mat-icon *ngIf="us.role.accessLevel >= 10" >
         supervisor_account
-      </md-icon>
+      </mat-icon>
     </button>
   </span>
 
-</md-toolbar>
+</mat-toolbar>
 
-<md-menu #accountMenu="mdMenu">
+<mat-menu #accountMenu="matMenu">
   <div *ngIf="us.role.accessLevel > 0; else signedOut2" >
-    <button md-menu-item (click)="signOut()" ><md-icon svgIcon="logout"></md-icon></button>
-    <button md-menu-item (click)="gotoUser()" ><md-icon>build</md-icon></button>
+    <button mat-menu-item (click)="signOut()" ><mat-icon svgIcon="logout"></mat-icon></button>
+    <button mat-menu-item (click)="gotoUser()" ><mat-icon>build</mat-icon></button>
 
   </div>
   <ng-template #signedOut2 >
-    <button md-menu-item (click)="signIn()" ><md-icon svgIcon="login">logout</md-icon></button>
+    <button mat-menu-item (click)="signIn()" ><mat-icon svgIcon="login">logout</mat-icon></button>
   </ng-template>
 
-  <button md-menu-item (click)="switchAccount()" > <md-icon svgIcon="account-switch"></md-icon> </button>
-</md-menu>
+  <button mat-menu-item (click)="switchAccount()" > <mat-icon svgIcon="account-switch"></mat-icon> </button>
+</mat-menu>
 
 <router-outlet></router-outlet>

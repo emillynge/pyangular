@@ -7,8 +7,8 @@ import { AppComponent } from './app.component';
 import { GoogleApiModule, NG_GAPI_CONFIG, ClientConfig} from "ng-gapi";
 import { BrowserAnimationsModule } from '@angular/platform-browser/animations';
 import {
-  MdButtonModule, MdCardModule, MdMenuModule, MdToolbarModule, MdIconModule,
-  MdInputModule, MdTooltipModule, MdProgressSpinnerModule,
+  MatButtonModule, MatCardModule, MatMenuModule, MatToolbarModule, MatIconModule,
+  MatInputModule, MatTooltipModule, MatProgressSpinnerModule,
 } from '@angular/material';
 import { NgLoggerModule, Level } from '@nsalaun/ng-logger';
 import { ApolloClient, createNetworkInterface } from 'apollo-client';
@@ -18,7 +18,6 @@ import { UserComponent } from './views/user/user.component';
 import {AppRoutingModule} from "./app-routing.module";
 import { ReactiveFormsModule } from '@angular/forms';
 import { environment } from '../environments/environment';
-import {ProjectComponent} from "./views/project/project.component";
 
 const networkInterface = createNetworkInterface('/graphql');
 
@@ -66,14 +65,14 @@ let gapiClientConfig: ClientConfig = {
     ReactiveFormsModule,
     HttpModule,
     BrowserAnimationsModule,
-    MdButtonModule,
-    MdMenuModule,
-    MdCardModule,
-    MdInputModule,
-    MdTooltipModule,
-    MdToolbarModule,
-    MdIconModule,
-    MdProgressSpinnerModule,
+    MatButtonModule,
+    MatMenuModule,
+    MatCardModule,
+    MatInputModule,
+    MatTooltipModule,
+    MatToolbarModule,
+    MatIconModule,
+    MatProgressSpinnerModule,
     ApolloModule.forRoot(provideClient),
     GoogleApiModule.forRoot({
       provide: NG_GAPI_CONFIG,

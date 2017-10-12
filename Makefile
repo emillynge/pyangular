@@ -12,3 +12,6 @@ print-def-libs:
 
 npm-update:
 	cd frontend && npm update
+
+npm-install:
+	cd frontend && npm install

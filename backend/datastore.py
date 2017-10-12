@@ -13,7 +13,7 @@ import pytz
 from json_tricks import TricksPairHook, json_date_time_hook
 from udatetime import TZFixedOffset
 
-from backend.sheets import get_project_sheets, get_sheet_modify_time
+from .sheets import get_sheet_modify_time
 
 _Union = type(Union)
 
